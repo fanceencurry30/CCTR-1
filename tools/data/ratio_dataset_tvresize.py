@@ -145,7 +145,7 @@ class RatioDataSetTVResize(Dataset):
         # if use_ratio >= (w // h) + 2:
         #     self.error += 1
         #     return None
-        test = 1
+        
         if not padding:
             resized_w = imgW
         else:
