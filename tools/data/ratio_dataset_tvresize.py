@@ -141,10 +141,10 @@ class RatioDataSetTVResize(Dataset):
         imgW, imgH = self.base_shape[gen_ratio - 1] if gen_ratio <= 4 else [
             self.base_h * gen_ratio, self.base_h
         ]
-        use_ratio = imgW // imgH
-        if use_ratio >= (w // h) + 2:
-            self.error += 1
-            return None
+        # use_ratio = imgW // imgH
+        # if use_ratio >= (w // h) + 2:
+        #     self.error += 1
+        #     return None
         if not padding:
             resized_w = imgW
         else:
