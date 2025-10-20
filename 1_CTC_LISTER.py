@@ -9,8 +9,7 @@ from tools.engine.config import Config
 from tools.data import build_dataloader
 from tools.utils.ckpt import load_ckpt
 from tools.utils.logging import get_logger
-
-
+        
 def parse_label(label_str):
     """解析带元数据的label字符串，例如 'hello <image_id=1_line_id=2>'"""
     if '<image_id=' in label_str and '_line_id=' in label_str:
@@ -22,6 +21,21 @@ def parse_label(label_str):
         return text, image_id, line_id
     return label_str, -1, -1
 
+def ctc_filter(topk_probs, topk_indices):
+    """根据CTC规则过滤topk结果，去除blank和连续重复字符"""
+    filtered_probs = []
+    filtered_indices = []
+    prev_index = None
+    
+    # 遍历每个时间步
+    for t in range(len(topk_indices)):
+        current_index = topk_indices[t][0]  # 取top1索引
+        if current_index != 0:  # 跳过blank
+            if current_index != prev_index:  # 跳过连续重复字符
+                filtered_probs.append(topk_probs[t].tolist())
+                filtered_indices.append(topk_indices[t].tolist())
+        prev_index = current_index
+    return filtered_probs, filtered_indices
 
 def generate_lister_ctc_data(config_path, model_path, output_dir):
     # 加载配置
@@ -65,12 +79,13 @@ def generate_lister_ctc_data(config_path, model_path, output_dir):
             # 取 logits
             if isinstance(preds, tuple) and len(preds) > 1 and isinstance(preds[1], dict) and 'logits' in preds[1]:
                 ctc_logits = preds[1]['logits'][-1]
+                ctc_probs = torch.softmax(ctc_logits, dim=-1)
             elif isinstance(preds, list) and preds and isinstance(preds[-1], dict) and 'logits' in preds[-1]:
                 ctc_logits = preds[-1]['logits']
-            else:
-                ctc_logits = preds
+                ctc_probs = torch.softmax(ctc_logits, dim=-1)
+            else :
+                ctc_probs = preds
 
-            ctc_probs = torch.softmax(ctc_logits, dim=-1)
             topk_probs, topk_indices = torch.topk(ctc_probs, k=100, dim=-1, largest=True, sorted=True)
 
             # 解码文本
@@ -82,14 +97,23 @@ def generate_lister_ctc_data(config_path, model_path, output_dir):
                 text, image_id, line_id = parse_label(label_text)
                 if image_id == -1:
                     continue
-
+                
+                # CTC过滤处理
+                filtered_probs, filtered_indices = ctc_filter(
+                    topk_probs[i].cpu().numpy(),
+                    topk_indices[i].cpu().numpy()
+                )
+                
                 line_data = {
                     'line_id': line_id,
                     'decoded_text': decoded_texts[i],
                     'label': text,
-                    'topk_probs': topk_probs[i].cpu().numpy().tolist(),
-                    'topk_indices': topk_indices[i].cpu().numpy().tolist(),
-                    'batch_idx': batch_idx
+                    'label_len': len(text),
+                    'topk_probs': filtered_probs,  # 使用过滤后的概率
+                    'topk_indices': filtered_indices,  # 使用过滤后的索引
+                    'batch_idx': batch_idx,
+                    'original_timesteps': len(topk_indices[i]),
+                    'filtered_timesteps': len(filtered_indices)  
                 }
                 image_results[image_id]['lines'].append(line_data)
 
@@ -98,22 +122,61 @@ def generate_lister_ctc_data(config_path, model_path, output_dir):
     for img_id, data in image_results.items():
         # 按行号和 batch 顺序排序
         lines_sorted = sorted(data['lines'], key=lambda x: (x['line_id'], x['batch_idx']))
-
+        
+        # 计算统计量
+        total_timesteps = sum(line['filtered_timesteps'] for line in lines_sorted) 
+        avg_timesteps_per_line = total_timesteps / len(lines_sorted) if lines_sorted else 0
+        
         # 拼接完整文本
         merged_decoded_text = "".join([line['decoded_text'] for line in lines_sorted])
+        merged_decoded_text_len = len(merged_decoded_text)  # 新增：预测文本长度
         merged_label = "".join([line['label'] for line in lines_sorted])
-
-        merged_probs = np.concatenate([np.array(line['topk_probs']) for line in lines_sorted], axis=0)
-        merged_indices = np.concatenate([np.array(line['topk_indices']) for line in lines_sorted], axis=0)
-
+        
+        # 确保所有行的topk_probs都是2维数组且第二维度为100
+        prob_arrays = []
+        for line in lines_sorted:
+            prob_array = np.array(line['topk_probs'])
+            if prob_array.size == 0:  # 如果过滤后为空
+                continue  # 跳过空行，或者可以用 prob_array = np.zeros((0, 100)) 保持结构
+            if prob_array.ndim == 1:
+                prob_array = prob_array.reshape(1, -1)
+            prob_arrays.append(prob_array)
+        
+        # 如果所有行都为空，创建一个空的2维数组
+        if not prob_arrays:
+            merged_probs = np.zeros((0, 100))
+        else:
+            merged_probs = np.concatenate(prob_arrays, axis=0)
+        
+        # 同样的处理应用于topk_indices
+        index_arrays = []
+        for line in lines_sorted:
+            index_array = np.array(line['topk_indices'])
+            if index_array.size == 0:  # 如果过滤后为空
+                continue  # 跳过空行，或者可以用 index_array = np.zeros((0, 100), dtype=int)
+            if index_array.ndim == 1:
+                index_array = index_array.reshape(1, -1)
+            index_arrays.append(index_array)
+        
+        if not index_arrays:
+            merged_indices = np.zeros((0, 100), dtype=int)
+        else:
+            merged_indices = np.concatenate(index_arrays, axis=0)
+        
+        
         result = {
             'image_id': img_id,
             'decoded_text': merged_decoded_text,
+            'decoded_text_len': merged_decoded_text_len,
             'label': merged_label,
             'num_lines': len(lines_sorted),
+            'total_timesteps': total_timesteps,
+            'avg_timesteps_per_line': round(avg_timesteps_per_line, 2),
+            'label_len': len(merged_label),
             'topk_probs': merged_probs.tolist(),
             'topk_indices': merged_indices.tolist(),
-            'line_ids': [line['line_id'] for line in lines_sorted]
+            'line_ids': [line['line_id'] for line in lines_sorted],
+            'timesteps_to_text_ratio': round(total_timesteps / merged_decoded_text_len, 2) if merged_decoded_text_len > 0 else 0
         }
         final_results.append(result)
 
@@ -138,8 +201,8 @@ def generate_lister_ctc_data(config_path, model_path, output_dir):
 
 
 if __name__ == "__main__":
-    config_path = './method_yml/lister.yml'
-    model_path = './method_pth/best_lister.pth'
-    output_dir = './ctc_probs/ctc_probs_svtr_train_new_100_lister_final'
+    config_path = './method_yml/crnn.yml'
+    model_path = './method_pth/best_crnn.pth'
+    output_dir = './ctc_probs/ctc_probs_crnn_train_filter'
     generate_lister_ctc_data(config_path, model_path, output_dir)
     print(f"✅ Top-100 CTC 概率和解码文本已生成并保存至 {output_dir}")
