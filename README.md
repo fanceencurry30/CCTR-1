@@ -37,17 +37,17 @@ python ./dataset_Pre/mdb_image_to_line.py
 python ./LLM-2/train.py
 
 # For fusion model
-python ./1_prepare_ctc.py # 生成原始ocr的ocr100
-python ./2_prepare_fusion_data.py # 根据1_prepare_ctc.py处理结果，对样本进行掩码，然后生成相应的lm100
-python ./3_normalize_data.py # 对ocr100和lm100序列进行归一化
-python ./4_train_fusion_modern.py # 接受3_normalize_data.py的数据，训练融合层
+python ./1_prepare_ctc.py # Ocr100 generating original OCR
+python ./2_prepare_fusion_data.py # Mask the sample according to the processing result of 1_prepare_ctc.py, and then generate the corresponding LM100
+python ./3_normalize_data.py # Normalize ocr100 and LM100 sequences
+python ./4_train_fusion_modern.py # Accept the data of 3_normalize_data.py and train the fusion layer
 ```
 
 ### 3.3 Evaluation
 
 ```shell
-python ./5_test_line.py # 测试我们的方法的行级指标
-python ./5_test_page.py # 测试我们的方法的行级指标
-python ./tools/eval_rec_all_ch # 测试openocr的行级指标
-python ./eval _image_level_acc.py # 测试openocr的页级指标
+python ./5_test_line.py # 
+python ./5_test_page.py # 
+python ./tools/eval_rec_all_ch # Test the line level index of openocr
+python ./eval _image_level_acc.py # Test the page level index of openocr
 ```
