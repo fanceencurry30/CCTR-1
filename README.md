@@ -1,23 +1,9 @@
-# SVTRv2
+# CCTR
 
 ## 1. Methods and Results
+Table 1， Table 2 and Table 3.
 
-### 1.1 Result 1
-
-| Method       | RCTW | ReCTS | LSVT | ArT  | CTW  | Web  | HW   | Arg  |
-| ------------ | ---- | ----- | ---- | ---- | ---- | ---- | ---- | ---- |
-| CRNN+VLFM    | 2.1  | 4.9   | 1.4  | 3.1  | 3.8  | 2.2  | 8.0  | 3.64 |
-| LISTER+VLFM  | 38.0 | 39.5  | 46.8 | 42.4 | 48.3 | 45.0 | 48.6 | 44.1 |
-| SMTR+VLFM    | 25.4 | 21.3  | 20.6 | 19.6 | 46.7 | 35.2 | 41.2 | 30.0 |
-| SVTR v2+VLFM | 1.1  | 0.9   | 1.3  | 2.3  | 2.6  | 1.4  | 2.9  | 1.8  |
-
-### 1.2 Result 2
-
-| Method        | Scene | Web  | Doc  | HW   | Arg   | $L_{>25}$ | Params(M) |
-| ------------- | ----- | ---- | ---- | ---- | ----- | --------- | --------- |
-| SVTR v2(2025) | 80.0  | 82.3 | 99.5 | 81.6 | 83.31 | 52.8      | 22.5      |
-| CCTR          | 80.0  | 82.3 | 99.5 | 81.6 | 83.31 | 52.8      | 59.7      |
-
+*Note: Only the results from Table 2 are shown here for clarity. Other tables also can using this code to get results.*
 
 
 ## 2. Environment
@@ -39,34 +25,29 @@ pip install -r requirements.txt
 
 ### 3.1 Dataset Preparation
 
-```shell
-# First stage
-python CTC_LISTER.py   # for svtr,crnn,lister生成batch大小的CTCjson，包括top-100 概率及对应索引
-python SMTR.py		   # for smtr
-
-# Second stage
-python project_lister.py
-python project_svtr.py #读取前面生成的 JSON 文件（包含 CTC top-100 概率和解码文本），结合语言模型 (LM) 的概率，生成新的训练数据（OCR 概率 + LM 概率 + GT 概率）
-python project_crnn.py
-python project_smtr.py
-
-# Third stage
-python prepare_data.py #读取多个 OCR+LM+GT 概率分布 JSON 文件。按照一定规则筛选/平衡样本。把所有数据转换成 PyTorch 张量，并保存成 .pt 文件
-                         #判断 OCR top1 是否等于 GT top1 → 分成匹配/不匹配。 选择样本（全样本 or 平衡采样）
+```
+python ./dataset_Pre/convert_to_lmdb_format.py
+python ./dataset_Pre/mdb_image_to_line.py
 ```
 
 ### 3.2 Training
 
 ```shell
 # For language model
-python train.py
+python ./LLM-2/train.py
 
-# For vision language attention module
-python train_eval_fusion60p_1.py
+# For fusion model
+python ./1_prepare_ctc.py # 生成原始ocr的ocr100
+python ./2_prepare_fusion_data.py # 根据1_prepare_ctc.py处理结果，对样本进行掩码，然后生成相应的lm100
+python ./3_normalize_data.py # 对ocr100和lm100序列进行归一化
+python ./4_train_fusion_modern.py # 接受3_normalize_data.py的数据，训练融合层
 ```
 
 ### 3.3 Evaluation
 
 ```shell
-python test_last_f.py
+python ./5_test_line.py # 测试我们的方法的行级指标
+python ./5_test_page.py # 测试我们的方法的行级指标
+python ./tools/eval_rec_all_ch # 测试openocr的行级指标
+python ./eval _image_level_acc.py # 测试openocr的页级指标
 ```
